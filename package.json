@@ -7,7 +7,11 @@
     "dev": "wrangler dev"
   },
   "devDependencies": {
+    "@capacitor/android": "^7.6.8",
+    "@capacitor/cli": "^7.6.8",
+    "@capacitor/core": "^7.6.8",
     "@cloudflare/workers-types": "^5.20260722.1",
+    "typescript": "^7.0.2",
     "wrangler": "^4.0.0"
   }
 }
