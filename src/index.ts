@@ -446,7 +446,7 @@ body{
     var parts = (timeVal || '00:00').split(':');
     var h = parts[0] || '00';
     var m = parts[1] || '00';
-    return new Date(dateVal + 'T' + h + ':' + m + ':' + defaultSec + '.' + defaultMs + 'Z');
+    return new Date(dateVal + 'T' + h + ':' + m + ':' + defaultSec + '.' + defaultMs);
   }
 
   function isFilterActive() {
