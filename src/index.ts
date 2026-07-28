@@ -292,15 +292,40 @@ body{
 .toast-error{background:#3a1a1a;border:1px solid var(--danger);color:#ffa198;}
 @keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
 /* Responsive */
-@media(max-width:640px){
-  .header{padding:12px 16px;}
-  .grid{padding:8px 16px;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:4px;}
+@media(max-width:768px){
+  .header{padding:8px 12px;}
+  .header h1{font-size:16px;}
+  .grid{padding:6px 12px;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:4px;}
+  .toolbar{flex-direction:column;align-items:flex-start;}
+  .filters{flex-wrap:wrap;}
+  .filters input,.filters select{font-size:16px;padding:8px 10px;}
+  .filters input[type="date"]{width:130px;}
+  .filters input[type="time"]{width:105px;}
+  .actions{width:100%;justify-content:flex-end;}
+  .btn{padding:8px 16px;font-size:14px;}
+  .grid-item .item-check{opacity:1;width:26px;height:26px;top:4px;left:4px;}
   .lightbox-nav{font-size:24px;padding:6px 10px;}
-  .lightbox-prev{left:8px;}
-  .lightbox-next{right:8px;}
-  .filters{flex:1;min-width:100%;}
-  .filters input{flex:1;}
+  .lightbox-prev{left:4px;}
+  .lightbox-next{right:4px;}
+  .lightbox-toolbar{gap:8px;}
+  .selection-bar.active~.grid{padding-bottom:70px;}
+  .breadcrumb{padding:6px 12px;font-size:12px;}
 }
+@media(max-width:400px){
+  .grid{grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:3px;padding:4px 8px;}
+}
+/* Selection Bar */
+.selection-bar{
+  position:fixed;bottom:0;left:0;right:0;z-index:500;
+  background:var(--surface);border-top:1px solid var(--border);
+  padding:10px 16px;display:flex;align-items:center;gap:10px;
+  transform:translateY(100%);transition:transform 0.25s ease;
+}
+.selection-bar.active{transform:translateY(0);}
+.selection-bar .sel-count{font-size:13px;color:var(--text-dim);margin-right:auto;}
+/* Selection mode forced visibility */
+body.selection-mode .grid-item .item-check{opacity:1!important;}
+body.selection-mode .grid-item .item-info{opacity:1!important;}
 </style>
 </head>
 <body>
@@ -374,6 +399,13 @@ body{
   </div>
 </div>
 
+<div class="selection-bar" id="selectionBar">
+  <span class="sel-count" id="selectionCount">0 selected</span>
+  <button class="btn" id="selectionCancel">Cancel</button>
+  <button class="btn btn-accent" id="selectionDownload">Download</button>
+  <button class="btn btn-danger" id="selectionDelete">Delete</button>
+</div>
+
 <script>
 (function(){
   var IMG_EXTS = {jpg:1,jpeg:1,png:1,gif:1,webp:1,svg:1,bmp:1,ico:1,avif:1,tiff:1,tif:1,heic:1,heif:1};
@@ -386,7 +418,8 @@ body{
     hasMore: false,
     loading: false,
     lightboxIdx: -1,
-    lastClickedIdx: -1
+    lastClickedIdx: -1,
+    selectionMode: false
   };
 
   var grid = document.getElementById('grid');
@@ -410,6 +443,8 @@ body{
   var lightboxMeta = document.getElementById('lightboxMeta');
   var deleteModal = document.getElementById('deleteModal');
   var deleteCount = document.getElementById('deleteCount');
+  var selectionBar = document.getElementById('selectionBar');
+  var selectionCount = document.getElementById('selectionCount');
 
   function getFilteredObjects() {
     var objs = state.objects;
@@ -564,6 +599,53 @@ body{
     }
     updateToolbar();
     updateSelectedStyles();
+    if (state.selectionMode) updateSelectionBar();
+  }
+
+  function enterSelectionMode() {
+    if (state.selectionMode) return;
+    state.selectionMode = true;
+    document.body.classList.add('selection-mode');
+    selectionBar.classList.add('active');
+    updateSelectionBar();
+  }
+
+  function exitSelectionMode() {
+    state.selectionMode = false;
+    document.body.classList.remove('selection-mode');
+    selectionBar.classList.remove('active');
+    clearSelection();
+    renderGrid();
+    updateToolbar();
+  }
+
+  function updateSelectionBar() {
+    var sel = selectCount();
+    selectionCount.textContent = sel + ' selected';
+  }
+
+  var longPressTimer = null;
+
+  function attachLongPress(item, key, idx) {
+    item.addEventListener('touchstart', function(e) {
+      longPressTimer = setTimeout(function() {
+        enterSelectionMode();
+        toggleSelect(key, true);
+        updateSelectionBar();
+        updateSelectedStyles();
+        updateToolbar();
+        state.lastClickedIdx = idx;
+        if (navigator.vibrate) navigator.vibrate(20);
+      }, 500);
+    }, {passive: true});
+
+    item.addEventListener('touchend', function() {
+      clearTimeout(longPressTimer);
+    });
+
+    item.addEventListener('touchmove', function() {
+      clearTimeout(longPressTimer);
+    });
   }
 
   function selectAllVisible() {
@@ -742,6 +824,16 @@ body{
         if (e.target.tagName === 'INPUT') return;
         var idx = parseInt(this.dataset.index);
         var filtered = getFilteredObjects();
+        var fkey = filtered[idx] ? filtered[idx].key : null;
+
+        if (state.selectionMode) {
+          e.preventDefault();
+          if (fkey) {
+            toggleSelect(fkey, !state.selected[fkey]);
+            updateSelectionBar();
+          }
+          return;
+        }
 
         if (e.shiftKey && state.lastClickedIdx >= 0 && state.lastClickedIdx < filtered.length) {
           e.preventDefault();
@@ -751,10 +843,8 @@ body{
 
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault();
-          var ckey = filtered[idx] ? filtered[idx].key : null;
-          if (ckey) {
-            toggleSelect(ckey, !state.selected[ckey]);
-            updateSelectedStyles();
+          if (fkey) {
+            toggleSelect(fkey, !state.selected[fkey]);
           }
           state.lastClickedIdx = idx;
           return;
@@ -763,6 +853,8 @@ body{
         state.lastClickedIdx = idx;
         openLightbox(idx);
       });
+
+      attachLongPress(item, obj.key, i);
 
       fragment.appendChild(item);
     }
@@ -931,6 +1023,9 @@ body{
         return !state.selected[o.key];
       });
       state.selected = {};
+      state.selectionMode = false;
+      document.body.classList.remove('selection-mode');
+      selectionBar.classList.remove('active');
       deleteModal.classList.add('hidden');
       renderGrid();
       updateToolbar();
@@ -1022,6 +1117,22 @@ body{
     if (e.target === lightbox) closeLightbox();
   });
 
+  var touchStartX = 0, touchStartY = 0;
+  lightbox.addEventListener('touchstart', function(e) {
+    if (e.touches.length === 1) {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+    }
+  }, {passive: true});
+
+  lightbox.addEventListener('touchend', function(e) {
+    var dx = e.changedTouches[0].clientX - touchStartX;
+    var dy = e.changedTouches[0].clientY - touchStartY;
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 50) {
+      navigateLightbox(dx < 0 ? 1 : -1);
+    }
+  });
+
   document.getElementById('lightboxDownload').addEventListener('click', function() {
     var filtered = getFilteredObjects();
     var obj = filtered[state.lightboxIdx];
@@ -1048,12 +1159,26 @@ body{
     if (e.target === deleteModal) deleteModal.classList.add('hidden');
   });
 
+  // Selection bar events
+  document.getElementById('selectionCancel').addEventListener('click', exitSelectionMode);
+  document.getElementById('selectionDownload').addEventListener('click', function() {
+    downloadSelected();
+    exitSelectionMode();
+  });
+  document.getElementById('selectionDelete').addEventListener('click', function() {
+    showDeleteModal();
+  });
+
   // Keyboard shortcuts
   document.addEventListener('keydown', function(e) {
     if (!lightbox.classList.contains('hidden')) {
       if (e.key === 'Escape') closeLightbox();
       if (e.key === 'ArrowLeft') navigateLightbox(-1);
       if (e.key === 'ArrowRight') navigateLightbox(1);
+    }
+    if (e.key === 'Escape' && state.selectionMode) {
+      exitSelectionMode();
+      return;
     }
     if (e.key === 'Escape' && !deleteModal.classList.contains('hidden')) {
       deleteModal.classList.add('hidden');
