@@ -604,6 +604,7 @@ body{
       renderFolderBar();
     } catch (err) {
       showToast('Failed to load files: ' + err.message, 'error');
+      renderFolderBar();
     } finally {
       state.loading = false;
       loadingState.classList.add('hidden');
@@ -875,6 +876,10 @@ body{
     updateToolbar();
   });
 
+  prefixFilter.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') navigateToFolder(prefixFilter.value);
+  });
+
   // Lightbox events
   document.getElementById('lightboxClose').addEventListener('click', closeLightbox);
   document.getElementById('lightboxPrev').addEventListener('click', function() { navigateLightbox(-1); });
@@ -927,12 +932,8 @@ body{
   });
 
   // Init
-  if (prefixFilter.value) {
-    clearSelection();
-    fetchObjects(false);
-  } else {
-    fetchObjects(false);
-  }
+  renderFolderBar();
+  fetchObjects(false);
 })();
 </script>
 </body>
