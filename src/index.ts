@@ -103,6 +103,24 @@ export default {
         return new Response(object.body, { headers });
       }
 
+      if (path === '/manifest.json') {
+        return new Response(MANIFEST, {
+          headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (path === '/sw.js') {
+        return new Response(SW, {
+          headers: { ...corsHeaders(), 'Content-Type': 'application/javascript' },
+        });
+      }
+
+      if (path === '/icon.svg') {
+        return new Response(ICON, {
+          headers: { ...corsHeaders(), 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' },
+        });
+      }
+
       return errorResponse('Not Found', 404);
     } catch (err: any) {
       console.error(err);
@@ -115,7 +133,11 @@ const HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.json">
 <title>R2 Browser</title>
 <style>
 :root {
@@ -1194,5 +1216,69 @@ body.selection-mode .grid-item .item-info{opacity:1!important;}
   fetchObjects(false);
 })();
 </script>
+<script>
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}
+</script>
 </body>
 </html>`;
+
+const MANIFEST = JSON.stringify({
+  name: 'R2 Browser',
+  short_name: 'R2Browser',
+  description: 'Cloudflare R2 storage image browser',
+  start_url: '/',
+  display: 'standalone',
+  orientation: 'any',
+  background_color: '#0d1117',
+  theme_color: '#0d1117',
+  icons: [
+    { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' },
+  ],
+});
+
+const ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="96" fill="#0d1117"/>
+  <path d="M160 200c0-26.51 21.49-48 48-48h16c8.84 0 16-7.16 16-16v-8c0-17.67 14.33-32 32-32h32c8.84 0 16 7.16 16 16s-7.16 16-16 16h-24c-4.42 0-8 3.58-8 8v8c0 26.51-21.49 48-48 48h-16c-8.84 0-16 7.16-16 16v16c0 8.84 7.16 16 16 16h96c26.51 0 48 21.49 48 48v48c0 8.84 7.16 16 16 16h16c8.84 0 16 7.16 16 16v8c0 17.67-14.33 32-32 32h-32c-8.84 0-16-7.16-16-16s7.16-16 16-16h24c4.42 0 8-3.58 8-8v-8c0-8.84-7.16-16-16-16h-16c-26.51 0-48-21.49-48-48v-48c0-8.84-7.16-16-16-16h-96c-26.51 0-48-21.49-48-48v-16z" fill="#58a6ff"/>
+  <rect x="128" y="264" width="96" height="64" rx="12" fill="#58a6ff" opacity="0.6"/>
+  <rect x="240" y="264" width="96" height="64" rx="12" fill="#58a6ff" opacity="0.4"/>
+</svg>`;
+
+const SW = `
+const CACHE = 'r2browser-v1';
+const ASSETS = ['/', '/manifest.json', '/icon.svg'];
+
+self.addEventListener('install', function(e) {
+  e.waitUntil(caches.open(CACHE).then(function(c) { return c.addAll(ASSETS); }));
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', function(e) {
+  e.waitUntil(caches.keys().then(function(keys) {
+    return Promise.all(keys.filter(function(k) { return k !== CACHE; }).map(function(k) { return caches.delete(k); }));
+  }));
+  self.clients.claim();
+});
+
+self.addEventListener('fetch', function(e) {
+  var url = new URL(e.request.url);
+  if (url.pathname.startsWith('/api/')) {
+    e.respondWith(
+      fetch(e.request).catch(function() {
+        return caches.match(e.request);
+      })
+    );
+    return;
+  }
+  e.respondWith(
+    caches.match(e.request).then(function(cached) {
+      return cached || fetch(e.request).then(function(resp) {
+        if (resp.ok) {
+          var clone = resp.clone();
+          caches.open(CACHE).then(function(c) { c.put(e.request, clone); });
+        }
+        return resp;
+      });
+    })
+  );
+});
+`;
