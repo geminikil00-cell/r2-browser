@@ -148,6 +148,24 @@ body{
 .filters input[type="text"]{width:180px;}
 .filters select{padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;outline:none;cursor:pointer;}
 .filters select:focus{border-color:var(--accent);}
+/* Folder Bar */
+.folder-bar{
+  padding:6px 24px;display:flex;align-items:center;gap:4px;
+  flex-wrap:wrap;border-bottom:1px solid var(--border);
+  background:var(--bg);min-height:34px;
+}
+.folder-chip{
+  padding:3px 10px;border:1px solid var(--border);border-radius:14px;
+  font-size:12px;cursor:pointer;transition:all var(--transition);
+  background:var(--surface);color:var(--text-dim);user-select:none;
+}
+.folder-chip:hover{border-color:var(--accent);color:var(--text);}
+.folder-chip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+.folder-separator{color:var(--text-dim);font-size:14px;line-height:1;}
+.folder-badge{
+  font-size:10px;color:var(--text-dim);background:var(--bg);
+  padding:1px 5px;border-radius:8px;margin-left:-1px;
+}
 .actions{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;}
 .actions .count{font-size:13px;color:var(--text-dim);white-space:nowrap;}
 .btn{
@@ -297,6 +315,8 @@ body{
   </div>
 </header>
 
+<div class="folder-bar" id="folderBar"></div>
+
 <main id="grid" class="grid"></main>
 
 <div id="emptyState" class="empty-state hidden">
@@ -424,6 +444,90 @@ body{
     loadMoreBtn.style.display = state.hasMore && !state.loading ? '' : 'none';
   }
 
+  var folderBar = null;
+
+  function extractFolders(objects, prefix) {
+    var folders = {};
+    var plen = prefix.length;
+    for (var i = 0; i < objects.length; i++) {
+      var key = objects[i].key;
+      if (plen > 0 && key.substring(0, plen) !== prefix) continue;
+      var rest = key.substring(plen);
+      var slash = rest.indexOf('/');
+      if (slash > 0) {
+        var folder = prefix + rest.substring(0, slash + 1);
+        folders[folder] = true;
+      }
+    }
+    return Object.keys(folders).sort();
+  }
+
+  function navigateToFolder(prefix) {
+    prefixFilter.value = prefix;
+    state.cursor = null;
+    state.selected = {};
+    fetchObjects(false);
+  }
+
+  function renderFolderBar() {
+    if (!folderBar) folderBar = document.getElementById('folderBar');
+    var prefix = prefixFilter.value;
+    var folders = extractFolders(state.objects, prefix);
+    folderBar.innerHTML = '';
+
+    var allChip = document.createElement('span');
+    allChip.className = 'folder-chip' + (prefix === '' ? ' active' : '');
+    allChip.textContent = 'All';
+    allChip.addEventListener('click', function() { navigateToFolder(''); });
+    folderBar.appendChild(allChip);
+
+    if (prefix) {
+      var parts = prefix.split('/').filter(function(p) { return p.length > 0; });
+      var accumulated = '';
+      for (var i = 0; i < parts.length; i++) {
+        var sep = document.createElement('span');
+        sep.className = 'folder-separator';
+        sep.textContent = '\u203A';
+        folderBar.appendChild(sep);
+
+        accumulated += parts[i] + '/';
+        var crumb = document.createElement('span');
+        crumb.className = 'folder-chip active';
+        crumb.textContent = parts[i];
+        (function(acc) {
+          crumb.addEventListener('click', function() { navigateToFolder(acc); });
+        })(accumulated);
+        folderBar.appendChild(crumb);
+      }
+    }
+
+    for (var j = 0; j < folders.length; j++) {
+      var sep2 = document.createElement('span');
+      sep2.className = 'folder-separator';
+      sep2.textContent = '\u203A';
+      folderBar.appendChild(sep2);
+
+      var chip = document.createElement('span');
+      chip.className = 'folder-chip';
+      chip.textContent = folders[j].replace(prefix, '').replace('/', '');
+      (function(folder) {
+        chip.addEventListener('click', function() { navigateToFolder(folder); });
+      })(folders[j]);
+      folderBar.appendChild(chip);
+
+      var count = 0;
+      for (var k = 0; k < state.objects.length; k++) {
+        if (state.objects[k].key.substring(0, folders[j].length) === folders[j]) count++;
+      }
+      if (count > 0) {
+        var badge = document.createElement('span');
+        badge.className = 'folder-badge';
+        badge.textContent = count;
+        folderBar.appendChild(badge);
+      }
+    }
+  }
+
   function clearSelection() {
     state.selected = {};
     var checks = document.querySelectorAll('.item-check');
@@ -497,6 +601,7 @@ body{
       state.hasMore = data.truncated;
       renderGrid();
       updateToolbar();
+      renderFolderBar();
     } catch (err) {
       showToast('Failed to load files: ' + err.message, 'error');
     } finally {
