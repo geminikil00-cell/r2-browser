@@ -50,8 +50,9 @@ export default {
         const prefix = url.searchParams.get('prefix') || '';
         const limit = Math.min(parseInt(url.searchParams.get('limit') || '200'), 1000);
         const cursor = url.searchParams.get('cursor') || undefined;
+        const delimiter = url.searchParams.get('delimiter') || undefined;
 
-        const listed = await env.BUCKET.list({ prefix, limit, cursor });
+        const listed = await env.BUCKET.list({ prefix, limit, cursor, delimiter });
         const objects = listed.objects.map((obj) => ({
           key: obj.key,
           size: obj.size,
@@ -62,6 +63,10 @@ export default {
 
         return jsonResponse({
           objects,
+          folders: (listed.delimitedPrefixes || []).map((p) => ({
+            prefix: p,
+            name: p.replace(prefix, '').replace(/\/$/, ''),
+          })),
           cursor: listed.truncated ? listed.cursor : null,
           truncated: listed.truncated,
         });
@@ -148,24 +153,30 @@ body{
 .filters input[type="text"]{width:180px;}
 .filters select{padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;outline:none;cursor:pointer;}
 .filters select:focus{border-color:var(--accent);}
-/* Folder Bar */
-.folder-bar{
+/* Breadcrumb */
+.breadcrumb{
   padding:6px 24px;display:flex;align-items:center;gap:4px;
   flex-wrap:wrap;border-bottom:1px solid var(--border);
-  background:var(--bg);min-height:34px;
+  background:var(--bg);min-height:34px;font-size:13px;
 }
-.folder-chip{
-  padding:3px 10px;border:1px solid var(--border);border-radius:14px;
-  font-size:12px;cursor:pointer;transition:all var(--transition);
-  background:var(--surface);color:var(--text-dim);user-select:none;
+.breadcrumb a{
+  color:var(--accent);text-decoration:none;cursor:pointer;
+  padding:2px 6px;border-radius:4px;
 }
-.folder-chip:hover{border-color:var(--accent);color:var(--text);}
-.folder-chip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
-.folder-separator{color:var(--text-dim);font-size:14px;line-height:1;}
-.folder-badge{
-  font-size:10px;color:var(--text-dim);background:var(--bg);
-  padding:1px 5px;border-radius:8px;margin-left:-1px;
+.breadcrumb a:hover{background:#1f2937;}
+.breadcrumb .sep{color:var(--text-dim);}
+.breadcrumb .current{color:var(--text-dim);font-weight:500;}
+/* Grid folder item */
+.grid-item.folder{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:6px;color:var(--text-dim);text-align:center;
 }
+.grid-item.folder .folder-icon{font-size:40px;}
+.grid-item.folder .folder-name{
+  font-size:12px;max-width:90%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.grid-item.folder .folder-count{font-size:10px;color:var(--text-dim);opacity:0.7;}
+.grid-item.folder:hover{color:var(--accent);border-color:var(--accent);}
 .actions{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;}
 .actions .count{font-size:13px;color:var(--text-dim);white-space:nowrap;}
 .btn{
@@ -315,7 +326,7 @@ body{
   </div>
 </header>
 
-<div class="folder-bar" id="folderBar"></div>
+<div class="breadcrumb" id="breadcrumb"></div>
 
 <main id="grid" class="grid"></main>
 
@@ -366,6 +377,7 @@ body{
 
   var state = {
     objects: [],
+    folders: [],
     selected: {},
     cursor: null,
     hasMore: false,
@@ -444,24 +456,6 @@ body{
     loadMoreBtn.style.display = state.hasMore && !state.loading ? '' : 'none';
   }
 
-  var folderBar = null;
-
-  function extractFolders(objects, prefix) {
-    var folders = {};
-    var plen = prefix.length;
-    for (var i = 0; i < objects.length; i++) {
-      var key = objects[i].key;
-      if (plen > 0 && key.substring(0, plen) !== prefix) continue;
-      var rest = key.substring(plen);
-      var slash = rest.indexOf('/');
-      if (slash > 0) {
-        var folder = prefix + rest.substring(0, slash + 1);
-        folders[folder] = true;
-      }
-    }
-    return Object.keys(folders).sort();
-  }
-
   function navigateToFolder(prefix) {
     prefixFilter.value = prefix;
     state.cursor = null;
@@ -469,61 +463,42 @@ body{
     fetchObjects(false);
   }
 
-  function renderFolderBar() {
-    if (!folderBar) folderBar = document.getElementById('folderBar');
-    var prefix = prefixFilter.value;
-    var folders = extractFolders(state.objects, prefix);
-    folderBar.innerHTML = '';
+  var breadcrumb = null;
 
-    var allChip = document.createElement('span');
-    allChip.className = 'folder-chip' + (prefix === '' ? ' active' : '');
-    allChip.textContent = 'All';
-    allChip.addEventListener('click', function() { navigateToFolder(''); });
-    folderBar.appendChild(allChip);
+  function renderBreadcrumb() {
+    if (!breadcrumb) breadcrumb = document.getElementById('breadcrumb');
+    var prefix = prefixFilter.value;
+    breadcrumb.innerHTML = '';
+
+    var allLink = document.createElement('a');
+    allLink.textContent = 'All';
+    allLink.addEventListener('click', function() { navigateToFolder(''); });
+    breadcrumb.appendChild(allLink);
 
     if (prefix) {
       var parts = prefix.split('/').filter(function(p) { return p.length > 0; });
       var accumulated = '';
       for (var i = 0; i < parts.length; i++) {
         var sep = document.createElement('span');
-        sep.className = 'folder-separator';
-        sep.textContent = '\u203A';
-        folderBar.appendChild(sep);
+        sep.className = 'sep';
+        sep.textContent = ' \u203A ';
+        breadcrumb.appendChild(sep);
 
         accumulated += parts[i] + '/';
-        var crumb = document.createElement('span');
-        crumb.className = 'folder-chip active';
-        crumb.textContent = parts[i];
-        (function(acc) {
-          crumb.addEventListener('click', function() { navigateToFolder(acc); });
-        })(accumulated);
-        folderBar.appendChild(crumb);
-      }
-    }
-
-    for (var j = 0; j < folders.length; j++) {
-      var sep2 = document.createElement('span');
-      sep2.className = 'folder-separator';
-      sep2.textContent = '\u203A';
-      folderBar.appendChild(sep2);
-
-      var chip = document.createElement('span');
-      chip.className = 'folder-chip';
-      chip.textContent = folders[j].replace(prefix, '').replace('/', '');
-      (function(folder) {
-        chip.addEventListener('click', function() { navigateToFolder(folder); });
-      })(folders[j]);
-      folderBar.appendChild(chip);
-
-      var count = 0;
-      for (var k = 0; k < state.objects.length; k++) {
-        if (state.objects[k].key.substring(0, folders[j].length) === folders[j]) count++;
-      }
-      if (count > 0) {
-        var badge = document.createElement('span');
-        badge.className = 'folder-badge';
-        badge.textContent = count;
-        folderBar.appendChild(badge);
+        var isLast = i === parts.length - 1;
+        if (isLast) {
+          var cur = document.createElement('span');
+          cur.className = 'current';
+          cur.textContent = parts[i];
+          breadcrumb.appendChild(cur);
+        } else {
+          var lnk = document.createElement('a');
+          lnk.textContent = parts[i];
+          (function(acc) {
+            lnk.addEventListener('click', function() { navigateToFolder(acc); });
+          })(accumulated);
+          breadcrumb.appendChild(lnk);
+        }
       }
     }
   }
@@ -584,6 +559,7 @@ body{
 
     var params = new URLSearchParams();
     params.set('limit', '200');
+    params.set('delimiter', '/');
     if (prefixFilter.value) params.set('prefix', prefixFilter.value);
     if (append && state.cursor) params.set('cursor', state.cursor);
 
@@ -595,16 +571,17 @@ body{
         state.objects = state.objects.concat(data.objects);
       } else {
         state.objects = data.objects;
+        state.folders = data.folders || [];
         state.selected = {};
       }
       state.cursor = data.cursor;
       state.hasMore = data.truncated;
       renderGrid();
       updateToolbar();
-      renderFolderBar();
+      renderBreadcrumb();
     } catch (err) {
       showToast('Failed to load files: ' + err.message, 'error');
-      renderFolderBar();
+      renderBreadcrumb();
     } finally {
       state.loading = false;
       loadingState.classList.add('hidden');
@@ -616,13 +593,36 @@ body{
     var filtered = getFilteredObjects();
     grid.innerHTML = '';
 
-    if (filtered.length === 0 && state.objects.length === 0 && !state.loading) {
+    if (filtered.length === 0 && state.folders.length === 0 && state.objects.length === 0 && !state.loading) {
       emptyState.classList.remove('hidden');
       return;
     }
     emptyState.classList.add('hidden');
 
     var fragment = document.createDocumentFragment();
+
+    for (var f = 0; f < state.folders.length; f++) {
+      var folder = state.folders[f];
+      var folderItem = document.createElement('div');
+      folderItem.className = 'grid-item folder';
+      folderItem.dataset.prefix = folder.prefix;
+
+      var icon = document.createElement('div');
+      icon.className = 'folder-icon';
+      icon.innerHTML = '&#128193;';
+      folderItem.appendChild(icon);
+
+      var fname = document.createElement('div');
+      fname.className = 'folder-name';
+      fname.textContent = folder.name;
+      folderItem.appendChild(fname);
+
+      folderItem.addEventListener('click', function(e) {
+        navigateToFolder(this.dataset.prefix);
+      });
+      fragment.appendChild(folderItem);
+    }
+
     for (var i = 0; i < filtered.length; i++) {
       var obj = filtered[i];
       var src = '/api/objects/' + encodeURIComponent(obj.key);
@@ -932,7 +932,7 @@ body{
   });
 
   // Init
-  renderFolderBar();
+  renderBreadcrumb();
   fetchObjects(false);
 })();
 </script>
