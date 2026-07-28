@@ -149,7 +149,8 @@ body{
 .filters{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
 .filters input{padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;outline:none;}
 .filters input:focus{border-color:var(--accent);}
-.filters input[type="date"]{color-scheme:dark;width:150px;}
+.filters input[type="date"]{color-scheme:dark;width:140px;}
+.filters input[type="time"]{color-scheme:dark;width:115px;}
 .filters input[type="text"]{width:180px;}
 .filters select{padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;outline:none;cursor:pointer;}
 .filters select:focus{border-color:var(--accent);}
@@ -310,7 +311,9 @@ body{
     <div class="filters">
       <input type="text" id="prefixFilter" placeholder="Prefix filter...">
       <input type="date" id="dateFrom" title="From date">
+      <input type="time" id="timeFrom" title="From time" step="60">
       <input type="date" id="dateTo" title="To date">
+      <input type="time" id="timeTo" title="To time" step="60">
       <select id="typeFilter">
         <option value="all">All Files</option>
         <option value="images" selected>Images Only</option>
@@ -397,6 +400,8 @@ body{
   var prefixFilter = document.getElementById('prefixFilter');
   var dateFrom = document.getElementById('dateFrom');
   var dateTo = document.getElementById('dateTo');
+  var timeFrom = document.getElementById('timeFrom');
+  var timeTo = document.getElementById('timeTo');
   var typeFilter = document.getElementById('typeFilter');
   var lightbox = document.getElementById('lightbox');
   var lightboxImage = document.getElementById('lightboxImage');
@@ -407,8 +412,8 @@ body{
 
   function getFilteredObjects() {
     var objs = state.objects;
-    var from = dateFrom.value ? new Date(dateFrom.value + 'T00:00:00.000Z') : null;
-    var to = dateTo.value ? new Date(dateTo.value + 'T23:59:59.999Z') : null;
+    var from = getFilterFrom();
+    var to = getFilterTo();
     var type = typeFilter.value;
 
     return objs.filter(function(o) {
@@ -425,6 +430,22 @@ body{
       }
       return true;
     });
+  }
+
+  function getFilterFrom() {
+    if (!dateFrom.value) return null;
+    var time = timeFrom.value || '00:00';
+    return new Date(dateFrom.value + 'T' + time + ':00.000Z');
+  }
+
+  function getFilterTo() {
+    if (!dateTo.value) return null;
+    var time = timeTo.value || '23:59';
+    return new Date(dateTo.value + 'T' + time + ':59.999Z');
+  }
+
+  function isFilterActive() {
+    return !!(dateFrom.value || dateTo.value);
   }
 
   function getExt(name) {
@@ -462,7 +483,11 @@ body{
     prefixFilter.value = prefix;
     state.cursor = null;
     state.selected = {};
-    fetchObjects(false);
+    if (isFilterActive()) {
+      fetchAllObjects();
+    } else {
+      fetchObjects(false);
+    }
   }
 
   var breadcrumb = null;
@@ -703,6 +728,50 @@ body{
     }
   }
 
+  async function fetchAllObjects() {
+    if (state.loading) return;
+    state.loading = true;
+    grid.innerHTML = '';
+    emptyState.classList.add('hidden');
+    loadingState.classList.remove('hidden');
+    loadMoreBtn.style.display = 'none';
+
+    var allObjects = [];
+    var cursor = null;
+    var totalFetched = 0;
+
+    try {
+      do {
+        var params = new URLSearchParams();
+        params.set('limit', '1000');
+        if (prefixFilter.value) params.set('prefix', prefixFilter.value);
+        if (cursor) params.set('cursor', cursor);
+
+        var resp = await fetch('/api/objects?' + params.toString());
+        if (!resp.ok) throw new Error('Failed to fetch: ' + resp.status);
+        var data = await resp.json();
+        allObjects = allObjects.concat(data.objects);
+        cursor = data.cursor;
+        totalFetched += data.objects.length;
+      } while (cursor && totalFetched < 10000);
+
+      state.objects = allObjects;
+      state.folders = [];
+      state.cursor = null;
+      state.hasMore = false;
+      state.selected = {};
+      renderGrid();
+      updateToolbar();
+      renderBreadcrumb();
+    } catch (err) {
+      showToast('Failed to load files: ' + err.message, 'error');
+    } finally {
+      state.loading = false;
+      loadingState.classList.add('hidden');
+      updateToolbar();
+    }
+  }
+
   function openLightbox(idx) {
     var filtered = getFilteredObjects();
     if (idx < 0 || idx >= filtered.length) return;
@@ -845,7 +914,11 @@ body{
   // Event Listeners
   refreshBtn.addEventListener('click', function() {
     state.cursor = null;
-    fetchObjects(false);
+    if (isFilterActive()) {
+      fetchAllObjects();
+    } else {
+      fetchObjects(false);
+    }
   });
 
   selectAllBtn.addEventListener('click', function() {
@@ -868,15 +941,24 @@ body{
     updateToolbar();
   });
 
-  dateFrom.addEventListener('input', function() {
-    renderGrid();
-    updateToolbar();
-  });
+  var filterTimeout = null;
 
-  dateTo.addEventListener('input', function() {
-    renderGrid();
-    updateToolbar();
-  });
+  dateFrom.addEventListener('input', applyFilterChange);
+  dateTo.addEventListener('input', applyFilterChange);
+  timeFrom.addEventListener('input', applyFilterChange);
+  timeTo.addEventListener('input', applyFilterChange);
+
+  function applyFilterChange() {
+    clearTimeout(filterTimeout);
+    filterTimeout = setTimeout(function() {
+      if (isFilterActive()) {
+        fetchAllObjects();
+      } else {
+        state.cursor = null;
+        fetchObjects(false);
+      }
+    }, 300);
+  }
 
   prefixFilter.addEventListener('keydown', function(e) {
     if (e.key === 'Enter') navigateToFolder(prefixFilter.value);
