@@ -407,7 +407,7 @@ body{
 
   function getFilteredObjects() {
     var objs = state.objects;
-    var from = dateFrom.value ? new Date(dateFrom.value) : null;
+    var from = dateFrom.value ? new Date(dateFrom.value + 'T00:00:00.000Z') : null;
     var to = dateTo.value ? new Date(dateTo.value + 'T23:59:59.999Z') : null;
     var type = typeFilter.value;
 
@@ -415,11 +415,13 @@ body{
       if (type === 'images' && !IMG_EXTS[getExt(o.key)]) return false;
       if (from) {
         var d = new Date(o.uploaded);
-        if (d < from) return false;
+        if (isNaN(d.getTime())) return false;
+        if (d.getTime() < from.getTime()) return false;
       }
       if (to) {
         var d = new Date(o.uploaded);
-        if (d > to) return false;
+        if (isNaN(d.getTime())) return false;
+        if (d.getTime() > to.getTime()) return false;
       }
       return true;
     });
@@ -866,12 +868,12 @@ body{
     updateToolbar();
   });
 
-  dateFrom.addEventListener('change', function() {
+  dateFrom.addEventListener('input', function() {
     renderGrid();
     updateToolbar();
   });
 
-  dateTo.addEventListener('change', function() {
+  dateTo.addEventListener('input', function() {
     renderGrid();
     updateToolbar();
   });
