@@ -1,6 +1,7 @@
 name = "r2-browser"
 main = "src/index.ts"
 compatibility_date = "2025-07-28"
+workers_dev = true
 
 [[r2_buckets]]
 binding = "BUCKET"
