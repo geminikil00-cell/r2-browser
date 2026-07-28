@@ -385,7 +385,8 @@ body{
     cursor: null,
     hasMore: false,
     loading: false,
-    lightboxIdx: -1
+    lightboxIdx: -1,
+    lastClickedIdx: -1
   };
 
   var grid = document.getElementById('grid');
@@ -579,6 +580,18 @@ body{
     renderGrid();
   }
 
+  function rangeSelect(fromIdx, toIdx) {
+    var filtered = getFilteredObjects();
+    var start = Math.min(fromIdx, toIdx);
+    var end = Math.max(fromIdx, toIdx);
+    if (start < 0 || end >= filtered.length) return;
+    for (var i = start; i <= end; i++) {
+      state.selected[filtered[i].key] = true;
+    }
+    renderGrid();
+    updateToolbar();
+  }
+
   async function fetchObjects(append) {
     if (state.loading) return [];
     state.loading = true;
@@ -673,7 +686,18 @@ body{
       cb.checked = !!state.selected[obj.key];
       cb.addEventListener('click', function(e) {
         e.stopPropagation();
-        toggleSelect(this.parentElement.dataset.key, this.checked);
+        var self = this;
+        var key = self.parentElement.dataset.key;
+        var idx = parseInt(self.parentElement.dataset.index);
+
+        if (e.shiftKey && state.lastClickedIdx >= 0) {
+          rangeSelect(state.lastClickedIdx, idx);
+          self.checked = true;
+          return;
+        }
+
+        toggleSelect(key, self.checked);
+        state.lastClickedIdx = idx;
       });
       item.appendChild(cb);
 
@@ -717,6 +741,26 @@ body{
       item.addEventListener('click', function(e) {
         if (e.target.tagName === 'INPUT') return;
         var idx = parseInt(this.dataset.index);
+        var filtered = getFilteredObjects();
+
+        if (e.shiftKey && state.lastClickedIdx >= 0 && state.lastClickedIdx < filtered.length) {
+          e.preventDefault();
+          rangeSelect(state.lastClickedIdx, idx);
+          return;
+        }
+
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          var ckey = filtered[idx] ? filtered[idx].key : null;
+          if (ckey) {
+            toggleSelect(ckey, !state.selected[ckey]);
+            updateSelectedStyles();
+          }
+          state.lastClickedIdx = idx;
+          return;
+        }
+
+        state.lastClickedIdx = idx;
         openLightbox(idx);
       });
 
