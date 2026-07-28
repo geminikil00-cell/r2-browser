@@ -434,14 +434,19 @@ body{
 
   function getFilterFrom() {
     if (!dateFrom.value) return null;
-    var time = timeFrom.value || '00:00';
-    return new Date(dateFrom.value + 'T' + time + ':00.000Z');
+    return parseFilterDate(dateFrom.value, timeFrom.value, '00', '000');
   }
 
   function getFilterTo() {
     if (!dateTo.value) return null;
-    var time = timeTo.value || '23:59';
-    return new Date(dateTo.value + 'T' + time + ':59.999Z');
+    return parseFilterDate(dateTo.value, timeTo.value, '59', '999');
+  }
+
+  function parseFilterDate(dateVal, timeVal, defaultSec, defaultMs) {
+    var parts = (timeVal || '00:00').split(':');
+    var h = parts[0] || '00';
+    var m = parts[1] || '00';
+    return new Date(dateVal + 'T' + h + ':' + m + ':' + defaultSec + '.' + defaultMs + 'Z');
   }
 
   function isFilterActive() {
