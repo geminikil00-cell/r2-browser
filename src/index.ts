@@ -60,6 +60,7 @@ export default {
           etag: obj.etag,
           isImage: isImage(obj.key),
         }));
+        objects.sort((a, b) => b.uploaded.localeCompare(a.uploaded));
 
         return jsonResponse({
           objects,
@@ -72,12 +73,33 @@ export default {
         });
       }
 
-      if (path === '/api/objects' && request.method === 'DELETE') {
-        const body: { keys: string[] } = await request.json();
+      if (path === '/api/objects' && (request.method === 'DELETE' || request.method === 'POST')) {
+        let body: { keys: string[] };
+        try {
+          body = await request.json();
+        } catch {
+          return errorResponse('Invalid JSON body', 400);
+        }
         if (!body.keys || !Array.isArray(body.keys) || body.keys.length === 0) {
           return errorResponse('Missing or empty keys array', 400);
         }
-        await env.BUCKET.delete(body.keys);
+        try {
+          await env.BUCKET.delete(body.keys);
+        } catch (batchErr: any) {
+          console.error('Batch delete failed:', batchErr.message || batchErr);
+          var failed: string[] = [];
+          for (var i = 0; i < body.keys.length; i++) {
+            try {
+              await env.BUCKET.delete(body.keys[i]);
+            } catch (singleErr: any) {
+              console.error('Failed to delete key:', body.keys[i], singleErr.message || singleErr);
+              failed.push(body.keys[i]);
+            }
+          }
+          if (failed.length > 0) {
+            return errorResponse('Failed to delete ' + failed.length + ' of ' + body.keys.length + ' files', 500);
+          }
+        }
         return jsonResponse({ deleted: body.keys.length });
       }
 
