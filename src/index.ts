@@ -740,8 +740,10 @@ body.selection-mode .grid-item .item-info{opacity:1!important;}
       var data = await resp.json();
       if (append) {
         state.objects = state.objects.concat(data.objects);
+        state.objects.sort(function(a, b) { return b.uploaded.localeCompare(a.uploaded); });
       } else {
         state.objects = data.objects;
+        state.objects.sort(function(a, b) { return b.uploaded.localeCompare(a.uploaded); });
         state.folders = data.folders || [];
         state.selected = {};
       }
@@ -938,8 +940,9 @@ body.selection-mode .grid-item .item-info{opacity:1!important;}
         allObjects = allObjects.concat(data.objects);
         cursor = data.cursor;
         totalFetched += data.objects.length;
-      } while (cursor && totalFetched < 10000);
+      } while (cursor);
 
+      allObjects.sort(function(a, b) { return b.uploaded.localeCompare(a.uploaded); });
       state.objects = allObjects;
       state.folders = [];
       state.cursor = null;
