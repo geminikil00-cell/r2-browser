@@ -485,6 +485,41 @@ export default {
         });
       }
 
+      // ---- AI index (produced locally by tools/ai_index.py, stored in R2) ----
+      if (path === '/api/ai-index' && request.method === 'GET') {
+        const manifest = await env.BUCKET.get('index/ai.json');
+        if (!manifest) {
+          return jsonResponse({ enabled: false });
+        }
+        return new Response(manifest.body, {
+          headers: {
+            ...corsHeaders(),
+            'Content-Type': 'application/json',
+            'Cache-Control': 'public, max-age=300',
+          },
+        });
+      }
+
+      if (path === '/api/ai-items' && request.method === 'GET') {
+        const items = await env.BUCKET.get('index/ai-items.jsonl');
+        if (!items) {
+          return new Response('[]', {
+            headers: { ...corsHeaders(), 'Content-Type': 'application/x-ndjson' },
+          });
+        }
+        let body: ReadableStream | null = items.body;
+        const headers = new Headers({
+          ...corsHeaders(),
+          'Content-Type': 'application/x-ndjson',
+          'Cache-Control': 'public, max-age=3600',
+        });
+        if (items.size > 65536 && typeof CompressionStream !== 'undefined') {
+          body = items.body.pipeThrough(new CompressionStream('gzip'));
+          headers.set('Content-Encoding', 'gzip');
+        }
+        return new Response(body, { headers });
+      }
+
       if (path === '/api/objects' && (request.method === 'DELETE' || request.method === 'POST')) {
         let body: { keys: string[] };
         try {
@@ -771,6 +806,36 @@ body{
 .selection-bar.active{transform:translateY(0);}
 .selection-bar .sel-count{font-size:13px;color:var(--text-dim);margin-right:auto;}
 body.selection-mode{padding-bottom:60px;}
+/* AI panel */
+.ai-panel{
+  border-bottom:1px solid var(--border);background:var(--surface);
+  padding:10px 16px;display:flex;flex-direction:column;gap:8px;
+}
+.ai-row{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap;}
+.ai-label{
+  font-size:11px;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--text-dim);min-width:62px;padding-top:5px;flex-shrink:0;
+}
+.ai-hint{font-size:11px;color:var(--text-dim);padding-top:5px;}
+.cluster-grid,.tag-row,.color-row{display:flex;gap:6px;flex-wrap:wrap;flex:1;}
+.cluster-card{
+  position:relative;border:2px solid transparent;border-radius:6px;overflow:hidden;
+  cursor:pointer;background:var(--surface2);
+}
+.cluster-card img{width:46px;height:46px;object-fit:cover;display:block;}
+.cluster-card .cn{
+  position:absolute;bottom:0;left:0;right:0;text-align:center;
+  background:rgba(0,0,0,.7);color:#fff;font-size:9px;line-height:1.3;
+}
+.cluster-card:hover{border-color:var(--accent);}
+.cluster-card.active{border-color:var(--accent);}
+.swatch{
+  width:26px;height:26px;border-radius:6px;border:2px solid transparent;
+  cursor:pointer;position:relative;
+}
+.swatch:hover{border-color:var(--text-dim);}
+.swatch.active{border-color:var(--accent);}
+.tag-row .chip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
 @media(max-width:768px){
   .header{padding:8px 10px;}
   .grid{padding:8px 10px;}
@@ -799,6 +864,7 @@ body.selection-mode{padding-bottom:60px;}
     <div class="actions">
       <span class="count" id="countLabel">0 items</span>
       <button class="btn" id="themeBtn" title="Toggle Light/Dark">Theme</button>
+      <button class="btn" id="aiBtn" title="Face and AI filters">Faces &amp; AI</button>
       <button class="btn" id="refreshBtn">Refresh</button>
       <button class="btn" id="selectAllBtn">Select All</button>
       <button class="btn btn-accent" id="downloadBtn" disabled>Download</button>
@@ -844,6 +910,27 @@ body.selection-mode{padding-bottom:60px;}
   <div class="breadcrumb" id="breadcrumb"></div>
   <div class="folder-pills" id="folderPills"></div>
   <span class="status-text" id="statusText">Ready</span>
+</div>
+
+<div class="ai-panel hidden" id="aiPanel">
+  <div class="ai-row">
+    <span class="ai-label">Faces</span>
+    <button class="chip" id="aiFacesOnly">Only photos with faces</button>
+    <button class="chip" id="aiClearBtn">Clear AI filters</button>
+    <span class="ai-hint" id="aiIndexStatus">AI index not loaded</span>
+  </div>
+  <div class="ai-row">
+    <span class="ai-label">People</span>
+    <div class="cluster-grid" id="clusterGrid"></div>
+  </div>
+  <div class="ai-row">
+    <span class="ai-label">Tags</span>
+    <div class="tag-row" id="tagRow"></div>
+  </div>
+  <div class="ai-row">
+    <span class="ai-label">Colours</span>
+    <div class="color-row" id="colorRow"></div>
+  </div>
 </div>
 
 <main id="grid" class="grid"></main>
@@ -900,6 +987,7 @@ body.selection-mode{padding-bottom:60px;}
 (function(){
   'use strict';
   var LS = 'r2browser:v3';
+  var PAGE_SIZE = 180;
   var state = {
     prefix: '',
     objects: [],
@@ -911,12 +999,21 @@ body.selection-mode{padding-bottom:60px;}
     nextAfter: null,
     hasMore: false,
     loading: false,
+    renderedCount: 0,
     lightboxIdx: -1,
     lastClickedIdx: -1,
     selectionMode: false,
     theme: 'dark',
     density: 'm',
-    reqId: 0
+    reqId: 0,
+    ai: {
+      ready: false,
+      manifest: null,
+      map: Object.create(null),
+      facesOnly: false,
+      tags: Object.create(null),
+      colors: Object.create(null)
+    }
   };
   var seenKeys = {};
 
@@ -996,6 +1093,14 @@ body.selection-mode{padding-bottom:60px;}
     return '/api/objects/' + encodeURIComponent(key);
   }
 
+  function keyTs(key) {
+    var base = key.split('/').pop() || key;
+    var m = base.match(/^(\d{10})/);
+    if (!m) return 0;
+    var n = parseInt(m[1], 10);
+    return (n >= 1000000000 && n <= 2500000000) ? n * 1000 : 0;
+  }
+
   function selCount() {
     return Object.keys(state.selected).length;
   }
@@ -1072,20 +1177,79 @@ body.selection-mode{padding-bottom:60px;}
     return copy;
   }
 
+  function aiFilterActive() {
+    var ai = state.ai;
+    if (ai.facesOnly) return true;
+    for (var k in ai.tags) if (ai.tags[k]) return true;
+    for (var c in ai.colors) if (ai.colors[c]) return true;
+    return false;
+  }
+
+  function renderWindow() {
+    var start = state.renderedCount;
+    if (start >= state.view.length) return;
+    var end = Math.min(state.view.length, start + PAGE_SIZE);
+    appendItemsToDom(state.view.slice(start, end), start);
+    state.renderedCount = end;
+  }
+
   function applyLocalSortAndFilter(rebuildDom) {
     var q = searchInput.value.trim().toLowerCase();
     var cat = catFilter.value.toLowerCase();
     var imgsOnly = typeFilter.value === 'images';
-    var filtered = state.objects.filter(function(o){
-      if (imgsOnly && !o.isImage) return false;
-      if (cat && o.key.toLowerCase().indexOf(cat) < 0) return false;
-      if (q && o.key.toLowerCase().indexOf(q) < 0) return false;
-      return true;
-    });
-    state.view = sortViewList(filtered);
+
+    if (aiFilterActive() && state.ai.ready) {
+      var wantTags = state.ai.tags;
+      var wantColors = state.ai.colors;
+      var wantFaces = state.ai.facesOnly;
+      var tagList = Object.keys(wantTags).filter(function(t){ return wantTags[t]; });
+      var colList = Object.keys(wantColors).filter(function(c){ return wantColors[c]; });
+      var prefix = state.prefix;
+      var fromMs = parseBound(dateFrom.value, timeFrom.value, false);
+      var toMs = parseBound(dateTo.value, timeTo.value, true);
+      var pool = [];
+      for (var key in state.ai.map) {
+        if (prefix && key.indexOf(prefix) !== 0) continue;
+        var rec = state.ai.map[key];
+        if (!rec) continue;
+        if (imgsOnly && !rec.g) continue;
+        var lk = key.toLowerCase();
+        if (cat && lk.indexOf(cat) < 0) continue;
+        if (q && lk.indexOf(q) < 0) continue;
+        if (wantFaces && !(rec.f && rec.f.length)) continue;
+        if (state.ai.faceId !== null && state.ai.faceId !== undefined) {
+          if (!(rec.f && rec.f.indexOf(state.ai.faceId) >= 0)) continue;
+        }
+        if (tagList.length) {
+          var hit = false;
+          if (rec.t) {
+            for (var ti = 0; ti < rec.t.length; ti++) {
+              if (wantTags[rec.t[ti]]) { hit = true; break; }
+            }
+          }
+          if (!hit) continue;
+        }
+        if (colList.length && !(rec.c !== undefined && wantColors[rec.c])) continue;
+        var t = keyTs(key) || Date.parse(rec.u) || 0;
+        if (fromMs && t < fromMs) continue;
+        if (toMs && t > toMs) continue;
+        pool.push({ key: key, size: rec.s, uploaded: rec.u, ts: t, isImage: !!rec.g });
+      }
+      state.view = sortViewList(pool);
+    } else {
+      var filtered = state.objects.filter(function(o){
+        if (imgsOnly && !o.isImage) return false;
+        if (cat && o.key.toLowerCase().indexOf(cat) < 0) return false;
+        if (q && o.key.toLowerCase().indexOf(q) < 0) return false;
+        return true;
+      });
+      state.view = sortViewList(filtered);
+    }
+
     if (rebuildDom) {
       grid.innerHTML = '';
-      appendItemsToDom(state.view, 0);
+      state.renderedCount = 0;
+      renderWindow();
     }
     emptyState.classList.toggle('hidden', state.view.length > 0 || state.loading);
     updateToolbar();
@@ -1211,6 +1375,7 @@ body.selection-mode{padding-bottom:60px;}
       state.nextBefore = null;
       state.nextBeforeTs = 0;
       state.nextAfter = null;
+      state.renderedCount = 0;
       seenKeys = {};
       grid.innerHTML = '';
       emptyState.classList.add('hidden');
@@ -1270,9 +1435,8 @@ body.selection-mode{padding-bottom:60px;}
 
       var sortMode = sortFilter.value;
       if (append && (sortMode === 'newest' || sortMode === 'oldest')) {
-        var startIdx = state.view.length;
         for (var j = 0; j < newItems.length; j++) state.view.push(newItems[j]);
-        appendItemsToDom(newItems, startIdx);
+        renderWindow();
       } else {
         applyLocalSortAndFilter(true);
       }
@@ -1635,11 +1799,10 @@ body.selection-mode{padding-bottom:60px;}
 
   // Infinite scroll
   window.addEventListener('scroll', function(){
-    if (!state.hasMore || state.loading) return;
     var doc = document.documentElement;
-    if (window.pageYOffset + window.innerHeight + 700 >= doc.scrollHeight) {
-      fetchObjects(true);
-    }
+    if (window.pageYOffset + window.innerHeight + 700 < doc.scrollHeight) return;
+    if (state.renderedCount < state.view.length) { renderWindow(); return; }
+    if (state.hasMore && !state.loading) fetchObjects(true);
   }, { passive: true });
 
   document.addEventListener('keydown', function(e){
@@ -1667,10 +1830,146 @@ body.selection-mode{padding-bottom:60px;}
     }
   });
 
-  // Init
+  // ---- AI index ----
+  var aiBtn = $('aiBtn'), aiPanel = $('aiPanel'), aiIndexStatus = $('aiIndexStatus');
+  var clusterGrid = $('clusterGrid'), tagRow = $('tagRow'), colorRow = $('colorRow');
+  var aiFacesOnly = $('aiFacesOnly'), aiClearBtn = $('aiClearBtn');
+
+  function loadAiIndex() {
+    fetch('/api/ai-index').then(function(r){ return r.json(); }).then(function(m){
+      if (!m || !m.enabled) {
+        aiIndexStatus.textContent = 'No AI index yet - run tools/ai_index.py to build one';
+        return;
+      }
+      state.ai.manifest = m;
+      renderAiPanel();
+      return fetch('/api/ai-items').then(function(r){ return r.text(); }).then(function(txt){
+        var lines = txt.split('\n');
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i];
+          if (!line) continue;
+          try {
+            var r = JSON.parse(line);
+            state.ai.map[r.k] = { s: r.s, u: r.u, g: r.g, f: r.f, t: r.t, c: r.c };
+          } catch (e) {}
+        }
+        state.ai.ready = true;
+        aiIndexStatus.textContent = m.count + ' images indexed \u00b7 ' +
+          (m.clusters ? m.clusters.length : 0) + ' people \u00b7 built ' + (m.generated || '');
+        renderAiPanel();
+        if (aiFilterActive()) applyLocalSortAndFilter(true);
+      });
+    }).catch(function(){
+      aiIndexStatus.textContent = 'AI index unavailable';
+    });
+  }
+
+  function renderAiPanel() {
+    var m = state.ai.manifest;
+    clusterGrid.innerHTML = '';
+    tagRow.innerHTML = '';
+    colorRow.innerHTML = '';
+    if (!m) return;
+
+    if (m.clusters && m.clusters.length) {
+      var clusters = m.clusters.slice(0, 40);
+      for (var i = 0; i < clusters.length; i++) {
+        (function(c){
+          var card = document.createElement('div');
+          card.className = 'cluster-card';
+          card.title = 'Person ' + (c.id + 1) + ' - ' + c.n + ' photos';
+          var img = document.createElement('img');
+          img.loading = 'lazy';
+          img.decoding = 'async';
+          img.src = thumbUrl(c.cover);
+          img.alt = 'Person ' + (c.id + 1);
+          var n = document.createElement('span');
+          n.className = 'cn';
+          n.textContent = c.n;
+          card.appendChild(img);
+          card.appendChild(n);
+          card.addEventListener('click', function(){
+            var cur = card.classList.contains('active');
+            for (var j = 0; j < clusterGrid.children.length; j++) {
+              clusterGrid.children[j].classList.remove('active');
+            }
+            if (cur) {
+              state.ai.faceId = null;
+            } else {
+              card.classList.add('active');
+              state.ai.faceId = c.id;
+            }
+            applyLocalSortAndFilter(true);
+          });
+          clusterGrid.appendChild(card);
+        })(clusters[i]);
+      }
+    }
+
+    if (m.tags && m.tags.length) {
+      for (var t = 0; t < m.tags.length; t++) {
+        (function(tagIdx, label){
+          var b = document.createElement('button');
+          b.className = 'chip';
+          b.textContent = label;
+          b.addEventListener('click', function(){
+            state.ai.tags[tagIdx] = !state.ai.tags[tagIdx];
+            b.classList.toggle('active', !!state.ai.tags[tagIdx]);
+            applyLocalSortAndFilter(true);
+          });
+          tagRow.appendChild(b);
+        })(t, m.tags[t].replace(/^a (photo|picture) (of|that is)\s*/i, '').replace(/^a\s+/i, ''));
+      }
+    }
+
+    if (m.colors && m.colors.length) {
+      var hexes = ['#000000','#ffffff','#808080','#dc2828','#f08c1e','#f5dc3c','#3cb450','#28b4b4','#326ee6','#9650dc','#f58cbe','#8c5f32'];
+      for (var c2 = 0; c2 < m.colors.length; c2++) {
+        (function(idx, name, hex){
+          var sw = document.createElement('button');
+          sw.className = 'swatch';
+          sw.style.background = hex;
+          sw.title = name;
+          sw.addEventListener('click', function(){
+            state.ai.colors[idx] = !state.ai.colors[idx];
+            sw.classList.toggle('active', !!state.ai.colors[idx]);
+            applyLocalSortAndFilter(true);
+          });
+          colorRow.appendChild(sw);
+        })(c2, m.colors[c2], hexes[c2] || '#888888');
+      }
+    }
+  }
+
+  aiBtn.addEventListener('click', function(){
+    aiPanel.classList.toggle('hidden');
+    aiBtn.classList.toggle('on', !aiPanel.classList.contains('hidden'));
+  });
+  aiFacesOnly.addEventListener('click', function(){
+    state.ai.facesOnly = !state.ai.facesOnly;
+    aiFacesOnly.classList.toggle('active', state.ai.facesOnly);
+    applyLocalSortAndFilter(true);
+  });
+  aiClearBtn.addEventListener('click', function(){
+    state.ai.facesOnly = false;
+    state.ai.faceId = null;
+    state.ai.tags = Object.create(null);
+    state.ai.colors = Object.create(null);
+    aiFacesOnly.classList.remove('active');
+    var ccards = clusterGrid.querySelectorAll('.cluster-card');
+    for (var c = 0; c < ccards.length; c++) ccards[c].classList.remove('active');
+    var chips = tagRow.querySelectorAll('.chip');
+    for (var i = 0; i < chips.length; i++) chips[i].classList.remove('active');
+    var sws = colorRow.querySelectorAll('.swatch');
+    for (var j = 0; j < sws.length; j++) sws[j].classList.remove('active');
+    applyLocalSortAndFilter(true);
+  });
+
+  // ---- Init ----
   loadPrefs();
   renderSubbar();
   fetchObjects(false);
+  loadAiIndex();
 })();
 </script>
 <script>
