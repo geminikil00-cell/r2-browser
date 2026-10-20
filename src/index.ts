@@ -355,6 +355,28 @@ export default {
         const prefix = url.searchParams.get('prefix') || '';
         const rawLimit = parseInt(url.searchParams.get('limit') || '', 10);
         const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 180;
+
+        // raw=1: plain forward cursor listing, exactly ONE R2 subrequest.
+        // Used for bulk enumeration - the seeking/sorting path below burns many
+        // subrequests and hits the 50-subrequest cap on deep folders.
+        if (url.searchParams.get('raw') === '1') {
+          const rawLimit2 = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 1000) : 1000;
+          const cursor = url.searchParams.get('cursor') || undefined;
+          const listed = await env.BUCKET.list({ prefix, limit: rawLimit2, cursor });
+          return jsonResponse({
+            objects: listed.objects.map((obj) => ({
+              key: obj.key,
+              size: obj.size,
+              uploaded: obj.uploaded.toISOString(),
+              etag: obj.etag,
+              isImage: isImage(obj.key),
+            })),
+            folders: [],
+            cursor: listed.truncated ? listed.cursor : null,
+            truncated: listed.truncated,
+          });
+        }
+
         const sort = url.searchParams.get('sort') || 'newest';
         const fromMs = parseInt(url.searchParams.get('from') || '0', 10) || 0;
         const toMs = parseInt(url.searchParams.get('to') || '0', 10) || 0;
